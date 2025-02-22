@@ -1,14 +1,9 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
 
 module Aztecs.SDL
   ( -- * Window components
@@ -103,6 +98,7 @@ setup =
 -- | Update SDL windows
 update ::
   ( ArrowQueryReader qr,
+    ArrowDynamicQueryReader qr,
     ArrowReaderSystem qr rs,
     ArrowQueueSystem b qm rs,
     ArrowReaderSchedule rs arr,
@@ -125,6 +121,7 @@ update =
 -- | Setup new windows.
 addWindows ::
   ( ArrowQueryReader q,
+    ArrowDynamicQueryReader q,
     ArrowReaderSystem q s,
     ArrowQueueSystem b qm s,
     ArrowReaderSchedule s arr,
@@ -156,7 +153,7 @@ instance NFData SurfaceTexture where
   rnf = rwhnf
 
 allWindowTextures ::
-  (ArrowQueryReader q, ArrowReaderSystem q arr) =>
+  (ArrowQueryReader q, ArrowDynamicQueryReader q, ArrowReaderSystem q arr) =>
   arr () [(WindowRenderer, [(EntityID, Surface, Transform2D, Maybe SurfaceTexture)])]
 allWindowTextures =
   allWindowDraws
@@ -173,6 +170,7 @@ allWindowTextures =
 -- | Build textures from surfaces in preparation for `drawTextures`.
 buildTextures ::
   ( ArrowQueryReader q,
+    ArrowDynamicQueryReader q,
     ArrowReaderSystem q s,
     ArrowReaderSchedule s arr,
     MonadIO m,
@@ -208,6 +206,7 @@ buildTextures =
 
 draw ::
   ( ArrowQueryReader q,
+    ArrowDynamicQueryReader q,
     ArrowReaderSystem q s,
     ArrowReaderSchedule s arr,
     MonadIO m,
@@ -259,7 +258,7 @@ draw =
    in reader allCameraSurfaces >>> access go
 
 allCameraSurfaces ::
-  (ArrowQueryReader q, ArrowReaderSystem q arr) =>
+  (ArrowQueryReader q, ArrowDynamicQueryReader q, ArrowReaderSystem q arr) =>
   arr () [(WindowRenderer, [((Camera, Transform2D), [(Surface, Transform2D, SurfaceTexture)])])]
 allCameraSurfaces =
   allWindowDraws
@@ -272,7 +271,7 @@ allCameraSurfaces =
     )
 
 allWindowDraws ::
-  (ArrowQueryReader q, ArrowReaderSystem q arr) =>
+  (ArrowQueryReader q, ArrowDynamicQueryReader q, ArrowReaderSystem q arr) =>
   (q () a) ->
   (q () b) ->
   arr () [(WindowRenderer, [(a, [b])])]
@@ -344,7 +343,12 @@ instance NFData Surface where
 
 -- | Add `SurfaceTarget` components to entities with a new `Surface` component.
 addSurfaceTargets ::
-  (ArrowQueryReader q, ArrowReaderSystem q arr, ArrowQueueSystem b m arr) => arr () ()
+  ( ArrowQueryReader q,
+    ArrowDynamicQueryReader q,
+    ArrowReaderSystem q arr,
+    ArrowQueueSystem b m arr
+  ) =>
+  arr () ()
 addSurfaceTargets = proc () -> do
   cameras <- S.all (Q.entity &&& Q.fetch @_ @Camera) -< ()
   newDraws <- S.filter (Q.entity &&& Q.fetch @_ @Surface) (without @SurfaceTarget) -< ()
