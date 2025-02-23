@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Cache
+        uses: actions/cache@v4
+
+        with:
+          path: |
+            ~/.cabal
+            dist-newstyle
+          key: ${{ runner.os }}-build-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.2.5"
+          cabal-version: "3.12"
+
+      - name: Install linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
+      - name: Update the package index
+        run: cabal update
+
+      - name: Run tests
+        run: cabal build
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Cache
+        uses: actions/cache@v4
+
+        with:
+          path: |
+            ~/.cabal
+            dist-newstyle
+          key: ${{ runner.os }}-build-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.2.5"
+          cabal-version: "3.12"
+
+      - name: Install linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
+      - name: Update the package index
+        run: cabal update
+
+      - name: Run tests
+        run: cabal test
+  doctest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal
+            dist-newstyle
+          key: ${{ runner.os }}-doctest-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.2.5"
+          cabal-version: "3.12"
+
+      - name: Install linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
+      - name: Install dependencies
+        run: |
+          cabal update
+          cabal install doctest
+      - name: Run doctests
+        run: cabal repl aztecs --with-compiler=doctest
