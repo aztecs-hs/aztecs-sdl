@@ -217,10 +217,11 @@ draw =
   let go windowDraws =
         mapM_
           ( \(window, cameraDraws) -> do
+              let renderer = windowRenderer window
+              rendererDrawColor renderer $= V4 0 0 0 255
+              clear renderer
               mapM_
                 ( \((camera, cameraTransform), cameraDraws') -> do
-                    let renderer = windowRenderer window
-                    rendererDrawColor renderer $= V4 0 0 0 255
                     rendererScale renderer $= fmap realToFrac (cameraScale camera)
                     rendererViewport renderer
                       $= Just
@@ -228,7 +229,6 @@ draw =
                             (P (fmap fromIntegral $ transformTranslation cameraTransform))
                             (fmap fromIntegral $ cameraViewport camera)
                         )
-                    clear renderer
                     mapM_
                       ( \(surface, transform, texture) -> do
                           textureDesc <- queryTexture $ unSurfaceTexture texture
@@ -250,9 +250,9 @@ draw =
                             (V2 False False)
                       )
                       cameraDraws'
-                    present renderer
                 )
                 cameraDraws
+              present renderer
           )
           windowDraws
    in reader allCameraSurfaces >>> access go
