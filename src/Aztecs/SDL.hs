@@ -1,5 +1,4 @@
 {-# LANGUAGE Arrows #-}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -56,19 +55,17 @@ import Aztecs.Input
     keyboardInput,
     mouseInput,
   )
-import Control.Arrow (Arrow (..), returnA, (>>>))
+import Control.Arrow (Arrow (..), returnA)
 import Control.DeepSeq
+import Control.Monad
 import Control.Monad.IO.Class
+import Data.Foldable
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 import SDL hiding (InputMotion (..), MouseButton (..), Surface, Texture, Window, windowTitle)
 import qualified SDL
-
-#if !MIN_VERSION_base(4,20,0)
-import Data.Foldable (foldl')
-#endif
 
 -- | Window renderer component.
 data WindowRenderer = WindowRenderer
@@ -85,54 +82,48 @@ instance NFData WindowRenderer where
   rnf = rwhnf
 
 -- | Setup SDL
-setup :: (MonadIO m) => (ArrowAccessSchedule b m arr) => arr () ()
-setup =
-  access (const $ liftIO initializeAll)
-    >>> access
-      ( const $ do
-          A.spawn_ . bundle $ Time 0
-          A.spawn_ $ bundle keyboardInput
-          A.spawn_ $ bundle mouseInput
-      )
+setup :: (MonadAccess b m, MonadIO m) => m ()
+setup = do
+  liftIO initializeAll
+  A.spawn_ . bundle $ Time 0
+  A.spawn_ $ bundle keyboardInput
+  A.spawn_ $ bundle mouseInput
 
 -- | Update SDL windows
 update ::
   ( ArrowQueryReader qr,
     ArrowDynamicQueryReader qr,
-    ArrowReaderSystem qr rs,
-    ArrowQueueSystem b qm rs,
-    ArrowReaderSchedule rs arr,
-    ArrowQuery q,
-    ArrowSystem q s,
-    ArrowReaderSystem qr s,
-    ArrowQueueSystem b qm s,
-    ArrowSchedule s arr,
+    ArrowQuery m q,
+    MonadSystem q s,
+    MonadReaderSystem qr s,
+    MonadIO s,
     MonadIO m,
-    ArrowAccessSchedule b m arr
+    MonadAccess b ma,
+    MonadIO ma
   ) =>
-  arr () ()
-update =
+  s (ma ())
+update = do
   updateTime
-    >>> addWindows
-    >>> reader (addCameraTargets >>> addSurfaceTargets)
-    >>> buildTextures
-    >>> handleInput
+  access <- addWindows
+  access' <- addCameraTargets
+  access'' <- addSurfaceTargets
+  access''' <- buildTextures
+  handleInput
+  return $ access >> access' >> access'' >> access'''
 
 -- | Setup new windows.
 addWindows ::
   ( ArrowQueryReader q,
     ArrowDynamicQueryReader q,
-    ArrowReaderSystem q s,
-    ArrowQueueSystem b qm s,
-    ArrowReaderSchedule s arr,
-    MonadIO m,
-    ArrowAccessSchedule b m arr
+    MonadReaderSystem q s,
+    MonadIO s,
+    MonadAccess b ma
   ) =>
-  arr () ()
-addWindows = proc () -> do
-  newWindows <- reader $ S.filter (Q.entity &&& Q.fetch @_ @Window) (without @WindowRenderer) -< ()
-  newWindows' <- access $ liftIO . mapM createWindowRenderer -< newWindows
-  reader $ S.queue $ mapM_ insertWindowRenderer -< newWindows'
+  s (ma ())
+addWindows = do
+  newWindows <- S.filter () (Q.entity &&& Q.fetch @_ @Window) (without @WindowRenderer)
+  newWindows' <- liftIO $ mapM createWindowRenderer newWindows
+  return $ mapM_ insertWindowRenderer newWindows'
   where
     createWindowRenderer (eId, window) = do
       sdlWindow <- createWindow (T.pack $ windowTitle window) defaultWindow
@@ -153,32 +144,32 @@ instance NFData SurfaceTexture where
   rnf = rwhnf
 
 allWindowTextures ::
-  (ArrowQueryReader q, ArrowDynamicQueryReader q, ArrowReaderSystem q arr) =>
-  arr () [(WindowRenderer, [(EntityID, Surface, Transform2D, Maybe SurfaceTexture)])]
+  (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
+  s [(WindowRenderer, [(EntityID, Surface, Transform2D, Maybe SurfaceTexture)])]
 allWindowTextures =
-  allWindowDraws
-    (arr (const ()))
-    ( proc () -> do
-        e <- Q.entity -< ()
-        surface <- Q.fetch -< ()
-        transform <- Q.fetch -< ()
-        texture <- Q.fetchMaybe -< ()
-        returnA -< (e, surface, transform, texture)
-    )
-    >>> arr (\cs -> map (\(w, cs') -> (w, concatMap snd cs')) cs)
+  map (second (concatMap snd))
+    <$> allWindowDraws
+      (arr (const ()))
+      ( proc () -> do
+          e <- Q.entity -< ()
+          surface <- Q.fetch -< ()
+          transform <- Q.fetch -< ()
+          texture <- Q.fetchMaybe -< ()
+          returnA -< (e, surface, transform, texture)
+      )
 
 -- | Build textures from surfaces in preparation for `drawTextures`.
 buildTextures ::
   ( ArrowQueryReader q,
     ArrowDynamicQueryReader q,
-    ArrowReaderSystem q s,
-    ArrowReaderSchedule s arr,
-    MonadIO m,
-    ArrowAccessSchedule b m arr
+    MonadReaderSystem q s,
+    MonadAccess b m,
+    MonadIO m
   ) =>
-  arr () ()
-buildTextures =
-  let go windowDraws =
+  s (m ())
+buildTextures = do
+  windowTextures <- allWindowTextures
+  let go =
         mapM_
           ( \(window, cameraDraws) -> do
               let renderer = windowRenderer window
@@ -194,72 +185,59 @@ buildTextures =
                       eId
                       ( Size $
                           transformScale transform
-                            * fromMaybe
-                              (fmap fromIntegral $ V2 (textureWidth textureDesc) (textureHeight textureDesc))
-                              ((fmap (\(Rectangle _ s) -> fmap fromIntegral s) $ surfaceBounds surface))
+                            * maybe (fromIntegral <$> V2 (textureWidth textureDesc) (textureHeight textureDesc)) (\(Rectangle _ s) -> fmap fromIntegral s) (surfaceBounds surface)
                       )
                 )
                 cameraDraws
           )
-          windowDraws
-   in reader allWindowTextures >>> access go
+          windowTextures
+  return go
 
-draw ::
-  ( ArrowQueryReader q,
-    ArrowDynamicQueryReader q,
-    ArrowReaderSystem q s,
-    ArrowReaderSchedule s arr,
-    MonadIO m,
-    ArrowAccessSchedule b m arr
-  ) =>
-  arr () ()
-draw =
-  let go windowDraws =
+draw :: (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s, MonadIO s) => s ()
+draw = do
+  cameraSurfaces <- allCameraSurfaces
+  mapM_
+    ( \(window, cameraDraws) -> do
+        let renderer = windowRenderer window
+        rendererDrawColor renderer $= V4 0 0 0 255
+        clear renderer
         mapM_
-          ( \(window, cameraDraws) -> do
-              let renderer = windowRenderer window
-              rendererDrawColor renderer $= V4 0 0 0 255
-              clear renderer
+          ( \((camera, cameraTransform), cameraDraws') -> do
+              rendererScale renderer $= fmap realToFrac (cameraScale camera)
+              rendererViewport renderer
+                $= Just
+                  ( Rectangle
+                      (P (fromIntegral <$> transformTranslation cameraTransform))
+                      (fromIntegral <$> cameraViewport camera)
+                  )
               mapM_
-                ( \((camera, cameraTransform), cameraDraws') -> do
-                    rendererScale renderer $= fmap realToFrac (cameraScale camera)
-                    rendererViewport renderer
-                      $= Just
-                        ( Rectangle
-                            (P (fmap fromIntegral $ transformTranslation cameraTransform))
-                            (fmap fromIntegral $ cameraViewport camera)
-                        )
-                    mapM_
-                      ( \(surface, transform, texture) -> do
-                          textureDesc <- queryTexture $ unSurfaceTexture texture
-                          copyEx
-                            renderer
-                            (unSurfaceTexture texture)
-                            (fmap fromIntegral <$> surfaceBounds surface)
-                            ( Just
-                                ( Rectangle
-                                    (fmap fromIntegral . P $ transformTranslation transform)
-                                    ( fromMaybe
-                                        (fmap fromIntegral $ V2 (textureWidth textureDesc) (textureHeight textureDesc))
-                                        ((fmap (\(Rectangle _ s) -> fmap fromIntegral s) $ surfaceBounds surface))
-                                    )
-                                )
-                            )
-                            (realToFrac $ transformRotation transform)
-                            Nothing
-                            (V2 False False)
+                ( \(surface, transform, texture) -> do
+                    textureDesc <- queryTexture $ unSurfaceTexture texture
+                    copyEx
+                      renderer
+                      (unSurfaceTexture texture)
+                      (fmap fromIntegral <$> surfaceBounds surface)
+                      ( Just
+                          ( Rectangle
+                              (fmap fromIntegral . P $ transformTranslation transform)
+                              ( maybe (fromIntegral <$> V2 (textureWidth textureDesc) (textureHeight textureDesc)) (\(Rectangle _ s) -> fmap fromIntegral s) (surfaceBounds surface)
+                              )
+                          )
                       )
-                      cameraDraws'
+                      (realToFrac $ transformRotation transform)
+                      Nothing
+                      (V2 False False)
                 )
-                cameraDraws
-              present renderer
+                cameraDraws'
           )
-          windowDraws
-   in reader allCameraSurfaces >>> access go
+          cameraDraws
+        present renderer
+    )
+    cameraSurfaces
 
 allCameraSurfaces ::
-  (ArrowQueryReader q, ArrowDynamicQueryReader q, ArrowReaderSystem q arr) =>
-  arr () [(WindowRenderer, [((Camera, Transform2D), [(Surface, Transform2D, SurfaceTexture)])])]
+  (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
+  s [(WindowRenderer, [((Camera, Transform2D), [(Surface, Transform2D, SurfaceTexture)])])]
 allCameraSurfaces =
   allWindowDraws
     (Q.fetch &&& Q.fetch)
@@ -271,31 +249,30 @@ allCameraSurfaces =
     )
 
 allWindowDraws ::
-  (ArrowQueryReader q, ArrowDynamicQueryReader q, ArrowReaderSystem q arr) =>
-  (q () a) ->
-  (q () b) ->
-  arr () [(WindowRenderer, [(a, [b])])]
-allWindowDraws qA qB = proc () -> do
+  (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
+  q () a ->
+  q () b ->
+  s [(WindowRenderer, [(a, [b])])]
+allWindowDraws qA qB = do
   cameras <-
     S.all
+      ()
       ( proc () -> do
           eId <- Q.entity -< ()
           cameraTarget <- Q.fetch @_ @CameraTarget -< ()
           a <- qA -< ()
           returnA -< (eId, cameraTarget, a)
       )
-      -<
-        ()
-  windows <- S.all (Q.entity &&& Q.fetch @_ @WindowRenderer) -< ()
+
+  windows <- S.all () (Q.entity &&& Q.fetch @_ @WindowRenderer)
   draws <-
     S.all
+      ()
       ( proc () -> do
           t <- Q.fetch @_ @SurfaceTarget -< ()
           a <- qB -< ()
           returnA -< (t, a)
       )
-      -<
-        ()
   let cameraDraws =
         map
           ( \(eId, cameraTarget, b) ->
@@ -320,7 +297,7 @@ allWindowDraws qA qB = proc () -> do
               )
           )
           windows
-  returnA -< windowDraws
+  return windowDraws
 
 -- | Surface target component.
 -- This component can be used to specify which `Camera` to draw a `Surface` to.
@@ -345,84 +322,76 @@ instance NFData Surface where
 addSurfaceTargets ::
   ( ArrowQueryReader q,
     ArrowDynamicQueryReader q,
-    ArrowReaderSystem q arr,
-    ArrowQueueSystem b m arr
+    MonadReaderSystem q s,
+    MonadAccess b m
   ) =>
-  arr () ()
-addSurfaceTargets = proc () -> do
-  cameras <- S.all (Q.entity &&& Q.fetch @_ @Camera) -< ()
-  newDraws <- S.filter (Q.entity &&& Q.fetch @_ @Surface) (without @SurfaceTarget) -< ()
-  S.queue
-    ( \(newDraws, cameras) -> case cameras of
+  s (m ())
+addSurfaceTargets = do
+  cameras <- S.all () (Q.entity &&& Q.fetch @_ @Camera)
+  newDraws <- S.filter () (Q.entity &&& Q.fetch @_ @Surface) (without @SurfaceTarget)
+  let go = case cameras of
         (cameraEId, _) : _ -> mapM_ (\(eId, _) -> A.insert eId $ SurfaceTarget cameraEId) newDraws
         _ -> return ()
-    )
-    -<
-      (newDraws, cameras)
+  return go
 
 updateTime ::
-  ( ArrowQuery q,
-    ArrowSystem q s,
-    ArrowSchedule s arr,
-    MonadIO m,
-    ArrowAccessSchedule b m arr
+  ( ArrowQuery m q,
+    MonadSystem q s,
+    MonadIO m
   ) =>
-  arr () ()
-updateTime = proc () -> do
-  t <- access . const $ liftIO SDL.ticks -< ()
-  system $ S.mapSingle Q.set -< Time t
-  returnA -< ()
+  s ()
+updateTime = void . S.mapSingle () $ Q.adjustM (\_ _ -> Time <$> SDL.ticks)
 
+-- | Keyboard input system.
 handleInput ::
   ( ArrowQueryReader qr,
-    ArrowReaderSystem qr s,
-    ArrowQuery q,
-    ArrowSystem q s,
-    ArrowSchedule s arr,
-    MonadIO m,
-    ArrowAccessSchedule b m arr
+    MonadReaderSystem qr s,
+    ArrowQuery m q,
+    MonadSystem q s,
+    MonadIO s
   ) =>
-  arr () ()
-handleInput = access (const pollEvents) >>> system handleInput'
+  s ()
+handleInput = liftIO pollEvents >>= handleInput'
 
 -- | Keyboard input system.
 handleInput' ::
-  (ArrowQueryReader qr, ArrowReaderSystem qr arr, ArrowQuery q, ArrowSystem q arr) =>
-  arr [Event] ()
-handleInput' = proc events -> do
-  kb <- S.single Q.fetch -< ()
-  mouse <- S.single Q.fetch -< ()
+  (ArrowQueryReader qr, MonadReaderSystem qr s, ArrowQuery m q, MonadSystem q s) =>
+  [Event] ->
+  s ()
+handleInput' events = do
   let go (kbAcc, mouseAcc) event = case eventPayload event of
         KeyboardEvent keyboardEvent ->
           ( case fromSDLKeycode $ keysymKeycode $ keyboardEventKeysym keyboardEvent of
-              Just key -> handleKeyboardEvent key (motionFromSDL $ keyboardEventKeyMotion keyboardEvent) kbAcc
+              Just key -> handleKeyboardEvent key (motionFromSDL $ keyboardEventKeyMotion keyboardEvent) . kbAcc
               Nothing -> kbAcc,
             mouseAcc
           )
         MouseMotionEvent mouseMotionEvent ->
           ( kbAcc,
-            mouseAcc
-              { mousePosition = (fmap fromIntegral $ mouseMotionEventPos mouseMotionEvent),
-                mouseOffset = (fmap fromIntegral $ mouseMotionEventRelMotion mouseMotionEvent),
-                mouseButtons = (mouseButtons mouseAcc)
-              }
+            \m ->
+              (mouseAcc m)
+                { mousePosition = fromIntegral <$> mouseMotionEventPos mouseMotionEvent,
+                  mouseOffset = fromIntegral <$> mouseMotionEventRelMotion mouseMotionEvent,
+                  mouseButtons = mouseButtons m
+                }
           )
         MouseButtonEvent mouseButtonEvent ->
           ( kbAcc,
-            mouseAcc
-              { mousePosition = (fmap fromIntegral $ mouseButtonEventPos mouseButtonEvent),
-                mouseButtons =
-                  Map.insert
-                    (mouseButtonFromSDL $ mouseButtonEventButton mouseButtonEvent)
-                    (motionFromSDL $ mouseButtonEventMotion mouseButtonEvent)
-                    (mouseButtons mouseAcc)
-              }
+            \m ->
+              (mouseAcc m)
+                { mousePosition = fromIntegral <$> mouseButtonEventPos mouseButtonEvent,
+                  mouseButtons =
+                    Map.insert
+                      (mouseButtonFromSDL $ mouseButtonEventButton mouseButtonEvent)
+                      (motionFromSDL $ mouseButtonEventMotion mouseButtonEvent)
+                      (mouseButtons m)
+                }
           )
         _ -> (kbAcc, mouseAcc)
-      (kb', mouseInput') = foldl' go (kb {keyboardEvents = mempty}, mouse {mouseOffset = V2 0 0}) events
-  S.mapSingle Q.set -< kb'
-  S.mapSingle Q.set -< mouseInput'
-  returnA -< ()
+      (updateKb, updateMouse) = foldl' go (id, id) events
+  _ <- S.map () . Q.adjust $ const updateKb
+  _ <- S.map () . Q.adjust $ const updateMouse
+  return ()
 
 mouseButtonFromSDL :: SDL.MouseButton -> MouseButton
 mouseButtonFromSDL b = case b of
