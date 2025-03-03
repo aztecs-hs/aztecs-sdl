@@ -97,19 +97,17 @@ update ::
     MonadSystem q s,
     MonadReaderSystem qr s,
     MonadIO s,
-    MonadIO m,
-    MonadAccess b ma,
-    MonadIO ma
+    MonadAccess b s,
+    MonadIO m
   ) =>
-  s (ma ())
+  s ()
 update = do
   updateTime
-  access <- addWindows
-  access' <- addCameraTargets
-  access'' <- addSurfaceTargets
-  access''' <- buildTextures
+  join addWindows
+  join addCameraTargets
+  join addSurfaceTargets
+  join buildTextures
   handleInput
-  return $ access >> access' >> access'' >> access'''
 
 -- | Setup new windows.
 addWindows ::
@@ -199,7 +197,6 @@ draw = do
   mapM_
     ( \(window, cameraDraws) -> do
         let renderer = windowRenderer window
-        rendererDrawColor renderer $= V4 0 0 0 255
         clear renderer
         mapM_
           ( \((camera, cameraTransform), cameraDraws') -> do
@@ -231,6 +228,7 @@ draw = do
                 cameraDraws'
           )
           cameraDraws
+        rendererDrawColor renderer $= V4 0 0 0 255
         present renderer
     )
     cameraSurfaces
