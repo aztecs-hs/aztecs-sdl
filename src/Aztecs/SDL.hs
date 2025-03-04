@@ -4,6 +4,14 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeApplications #-}
 
+-- |
+-- Module      : Aztecs.SDL
+-- Copyright   : (c) Matt Hunzinger, 2025
+-- License     : BSD-style (see the LICENSE file in the distribution)
+--
+-- Maintainer  : matt@hunzinger.me
+-- Stability   : provisional
+-- Portability : non-portable (GHC extensions)
 module Aztecs.SDL
   ( -- * Window components
     WindowRenderer (..),
@@ -44,18 +52,12 @@ module Aztecs.SDL
 where
 
 import Aztecs
-import Aztecs.Camera (addCameraTargets)
+import Aztecs.Camera
 import qualified Aztecs.ECS.Access as A
 import qualified Aztecs.ECS.Query as Q
 import qualified Aztecs.ECS.System as S
 import Aztecs.Input
-  ( InputMotion (..),
-    MouseButton (..),
-    handleKeyboardEvent,
-    keyboardInput,
-    mouseInput,
-  )
-import Control.Arrow (Arrow (..), returnA)
+import Control.Arrow
 import Control.DeepSeq
 import Control.Monad
 import Control.Monad.IO.Class
@@ -63,25 +65,35 @@ import Data.Foldable
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import qualified Data.Text as T
-import GHC.Generics (Generic)
+import GHC.Generics
 import SDL hiding (InputMotion (..), MouseButton (..), Surface, Texture, Window, windowTitle)
 import qualified SDL
 
 -- | Window renderer component.
+--
+-- @since 0.5
 data WindowRenderer = WindowRenderer
   { -- | SDL window.
+    --
+    -- @since 0.5
     windowRendererRaw :: !SDL.Window,
     -- | SDL renderer.
+    --
+    -- @since 0.5
     windowRenderer :: !Renderer
   }
   deriving (Show, Generic)
 
+-- | @since 0.5
 instance Component WindowRenderer
 
+-- | @since 0.5
 instance NFData WindowRenderer where
   rnf = rwhnf
 
 -- | Setup SDL
+--
+-- @since 0.5
 setup :: (MonadAccess b m, MonadIO m) => m ()
 setup = do
   liftIO initializeAll
@@ -90,6 +102,8 @@ setup = do
   A.spawn_ $ bundle mouseInput
 
 -- | Update SDL windows
+--
+-- @since 0.5
 update ::
   ( ArrowQueryReader qr,
     ArrowDynamicQueryReader qr,
@@ -110,6 +124,8 @@ update = do
   handleInput
 
 -- | Setup new windows.
+--
+-- @since 0.5
 addWindows ::
   ( ArrowQueryReader q,
     ArrowDynamicQueryReader q,
@@ -127,20 +143,29 @@ addWindows = do
       sdlWindow <- createWindow (T.pack $ windowTitle window) defaultWindow
       renderer <- createRenderer sdlWindow (-1) defaultRenderer
       return (eId, sdlWindow, renderer)
-    insertWindowRenderer (eId, window, renderer) = A.insert eId (WindowRenderer window renderer)
+    insertWindowRenderer (eId, window, renderer) = A.insert eId . bundle $ WindowRenderer window renderer
 
 -- | Surface texture component.
+--
+-- @since 0.5
 newtype SurfaceTexture = SurfaceTexture
   { -- | SDL texture.
+    --
+    -- @since 0.5
     unSurfaceTexture :: SDL.Texture
   }
   deriving (Generic)
 
+-- | @since 0.5
 instance Component SurfaceTexture
 
+-- | @since 0.5
 instance NFData SurfaceTexture where
   rnf = rwhnf
 
+-- | Query all window textures.
+--
+-- @since 0.5
 allWindowTextures ::
   (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
   s [(WindowRenderer, [(EntityID, Surface, Transform2D, Maybe SurfaceTexture)])]
@@ -157,6 +182,8 @@ allWindowTextures =
       )
 
 -- | Build textures from surfaces in preparation for `drawTextures`.
+--
+-- @since 0.5
 buildTextures ::
   ( ArrowQueryReader q,
     ArrowDynamicQueryReader q,
@@ -178,10 +205,10 @@ buildTextures = do
                     case maybeTexture of
                       Just (SurfaceTexture lastTexture) -> destroyTexture lastTexture
                       Nothing -> return ()
-                    A.insert eId (SurfaceTexture sdlTexture)
+                    A.insert eId . bundle $ SurfaceTexture sdlTexture
                     A.insert
                       eId
-                      ( Size $
+                      ( bundle . Size $
                           transformScale transform
                             * maybe (fromIntegral <$> V2 (textureWidth textureDesc) (textureHeight textureDesc)) (\(Rectangle _ s) -> fmap fromIntegral s) (surfaceBounds surface)
                       )
@@ -191,6 +218,9 @@ buildTextures = do
           windowTextures
   return go
 
+-- | Draw all textures to their targetted windows.
+--
+-- @since 0.5
 draw :: (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s, MonadIO s) => s ()
 draw = do
   cameraSurfaces <- allCameraSurfaces
@@ -233,6 +263,9 @@ draw = do
     )
     cameraSurfaces
 
+-- | Query all cameras and their target surfaces.
+--
+-- @since 0.5
 allCameraSurfaces ::
   (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
   s [(WindowRenderer, [((Camera, Transform2D), [(Surface, Transform2D, SurfaceTexture)])])]
@@ -246,6 +279,9 @@ allCameraSurfaces =
         returnA -< (surface, transform, texture)
     )
 
+-- | Query all windows and drawable surfaces.
+--
+-- @since 0.5
 allWindowDraws ::
   (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
   q () a ->
@@ -299,6 +335,8 @@ allWindowDraws qA qB = do
 
 -- | Surface target component.
 -- This component can be used to specify which `Camera` to draw a `Surface` to.
+--
+-- @since 0.5
 newtype SurfaceTarget = SurfaceTarget {drawTargetCamera :: EntityID}
   deriving (Eq, Show, Generic, NFData)
 
@@ -306,17 +344,23 @@ instance Component SurfaceTarget
 
 -- | Surface component.
 -- This component can be used to draw to a window.
+--
+-- @since 0.5
 data Surface = Surface
   { sdlSurface :: !SDL.Surface,
     surfaceBounds :: !(Maybe (Rectangle Int))
   }
 
+-- | @since 0.5
 instance Component Surface
 
+-- | @since 0.5
 instance NFData Surface where
   rnf = rwhnf
 
 -- | Add `SurfaceTarget` components to entities with a new `Surface` component.
+--
+-- @since 0.5
 addSurfaceTargets ::
   ( ArrowQueryReader q,
     ArrowDynamicQueryReader q,
@@ -328,10 +372,13 @@ addSurfaceTargets = do
   cameras <- S.all () (Q.entity &&& Q.fetch @_ @Camera)
   newDraws <- S.filter () (Q.entity &&& Q.fetch @_ @Surface) (without @SurfaceTarget)
   let go = case cameras of
-        (cameraEId, _) : _ -> mapM_ (\(eId, _) -> A.insert eId $ SurfaceTarget cameraEId) newDraws
+        (cameraEId, _) : _ -> mapM_ (\(eId, _) -> A.insert eId . bundle $ SurfaceTarget cameraEId) newDraws
         _ -> return ()
   return go
 
+-- | Update the current `Time`.
+--
+-- @since 0.5
 updateTime ::
   ( ArrowQuery m q,
     MonadSystem q s,
@@ -341,6 +388,8 @@ updateTime ::
 updateTime = void . S.mapSingle () $ Q.adjustM (\_ _ -> Time <$> SDL.ticks)
 
 -- | Keyboard input system.
+--
+-- @since 0.5
 handleInput ::
   ( ArrowQueryReader qr,
     MonadReaderSystem qr s,
@@ -352,6 +401,8 @@ handleInput ::
 handleInput = liftIO pollEvents >>= handleInput'
 
 -- | Keyboard input system.
+--
+-- @since 0.5
 handleInput' ::
   (ArrowQueryReader qr, MonadReaderSystem qr s, ArrowQuery m q, MonadSystem q s) =>
   [Event] ->
@@ -391,6 +442,9 @@ handleInput' events = do
   _ <- S.map () . Q.adjust $ const updateMouse
   return ()
 
+-- | Convert an SDL mouse button to `MouseButton`.
+--
+-- @since 0.5
 mouseButtonFromSDL :: SDL.MouseButton -> MouseButton
 mouseButtonFromSDL b = case b of
   SDL.ButtonLeft -> ButtonLeft
@@ -400,6 +454,9 @@ mouseButtonFromSDL b = case b of
   SDL.ButtonX2 -> ButtonX2
   SDL.ButtonExtra i -> ButtonExtra i
 
+-- | Convert a `MouseButton` to an SDL mouse button.
+--
+-- @since 0.5
 mouseButtonToSDL :: MouseButton -> SDL.MouseButton
 mouseButtonToSDL b = case b of
   ButtonLeft -> SDL.ButtonLeft
@@ -409,16 +466,25 @@ mouseButtonToSDL b = case b of
   ButtonX2 -> SDL.ButtonX2
   ButtonExtra i -> SDL.ButtonExtra i
 
+-- | Convert an SDL input motion to `InputMotion`.
+--
+-- @since 0.5
 motionFromSDL :: SDL.InputMotion -> InputMotion
 motionFromSDL m = case m of
   SDL.Pressed -> Pressed
   SDL.Released -> Released
 
+-- | Convert an `InputMotion` to an SDL input motion.
+--
+-- @since 0.5
 motionToSDL :: InputMotion -> SDL.InputMotion
 motionToSDL m = case m of
   Pressed -> SDL.Pressed
   Released -> SDL.Released
 
+-- | Convert an SDL key code to `Key`.
+--
+-- @since 0.5
 toSDLKeycode :: Key -> SDL.Keycode
 toSDLKeycode key = case key of
   KeyA -> SDL.KeycodeA
@@ -514,9 +580,12 @@ toSDLKeycode key = case key of
   KeyNumpadPlus -> SDL.KeycodeKPPlus
   KeyNumpadEnter -> SDL.KeycodeKPEnter
   KeyNumpadPeriod -> SDL.KeycodeKPPeriod
-  KeySuper -> SDL.KeycodeLGUI -- assuming left Super (Windows/Command key); SDL also has RGUI
+  KeySuper -> SDL.KeycodeLGUI
   KeyMenu -> SDL.KeycodeMenu
 
+-- | Convert a `Key` to an SDL key code.
+--
+-- @since 0.5
 fromSDLKeycode :: SDL.Keycode -> Maybe Key
 fromSDLKeycode keycode = case keycode of
   SDL.KeycodeA -> Just KeyA
