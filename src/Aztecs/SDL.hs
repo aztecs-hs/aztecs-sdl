@@ -1,4 +1,4 @@
-{-# LANGUAGE Arrows #-}
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -105,9 +105,11 @@ setup = do
 --
 -- @since 0.6
 update ::
-  ( ArrowQueryReader qr,
-    ArrowDynamicQueryReader qr,
-    ArrowQuery m q,
+  ( Applicative qr,
+    QueryReaderF qr,
+    DynamicQueryReaderF qr,
+    Applicative q,
+    QueryF m q,
     MonadSystem q s,
     MonadReaderSystem qr s,
     MonadIO s,
@@ -126,7 +128,7 @@ update = do
 -- | Draw all textures to their targetted windows.
 --
 -- @since 0.6
-draw :: (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s, MonadIO s) => s ()
+draw :: (Applicative q, QueryReaderF q, DynamicQueryReaderF q, MonadReaderSystem q s, MonadIO s) => s ()
 draw = do
   cameraSurfaces <- allCameraSurfaces
   mapM_
@@ -172,15 +174,16 @@ draw = do
 --
 -- @since 0.6
 addWindows ::
-  ( ArrowQueryReader q,
-    ArrowDynamicQueryReader q,
+  ( Applicative q,
+    QueryReaderF q,
+    DynamicQueryReaderF q,
     MonadReaderSystem q s,
     MonadIO s,
     MonadAccess b ma
   ) =>
   s (ma ())
 addWindows = do
-  newWindows <- S.filter () (Q.entity &&& Q.fetch @_ @Window) (without @WindowRenderer)
+  newWindows <- S.filter ((,) <$> Q.entity <*> Q.fetch @_ @Window) (without @WindowRenderer)
   newWindows' <- liftIO $ mapM createWindowRenderer newWindows
   return $ mapM_ insertWindowRenderer newWindows'
   where
@@ -212,26 +215,27 @@ instance NFData SurfaceTexture where
 --
 -- @since 0.6
 allWindowTextures ::
-  (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
+  (Applicative q, QueryReaderF q, DynamicQueryReaderF q, MonadReaderSystem q s) =>
   s [(WindowRenderer, [(EntityID, Surface, Transform2D, Maybe SurfaceTexture)])]
 allWindowTextures =
   map (second (concatMap snd))
     <$> allWindowDraws
-      (arr (const ()))
-      ( proc () -> do
-          e <- Q.entity -< ()
-          surface <- Q.fetch -< ()
-          transform <- Q.fetch -< ()
-          texture <- Q.fetchMaybe -< ()
-          returnA -< (e, surface, transform, texture)
+      (pure ())
+      ( do
+          e <- Q.entity
+          surface <- Q.fetch
+          transform <- Q.fetch
+          texture <- Q.fetchMaybe
+          return (e, surface, transform, texture)
       )
 
 -- | Build textures from surfaces in preparation for `drawTextures`.
 --
 -- @since 0.6
 buildTextures ::
-  ( ArrowQueryReader q,
-    ArrowDynamicQueryReader q,
+  ( Applicative q,
+    QueryReaderF q,
+    DynamicQueryReaderF q,
     MonadReaderSystem q s,
     MonadAccess b m,
     MonadIO m
@@ -267,46 +271,40 @@ buildTextures = do
 --
 -- @since 0.6
 allCameraSurfaces ::
-  (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
+  (Applicative q, QueryReaderF q, DynamicQueryReaderF q, MonadReaderSystem q s) =>
   s [(WindowRenderer, [((Camera, Transform2D), [(Surface, Transform2D, SurfaceTexture)])])]
 allCameraSurfaces =
   allWindowDraws
-    (Q.fetch &&& Q.fetch)
-    ( proc () -> do
-        surface <- Q.fetch -< ()
-        transform <- Q.fetch -< ()
-        texture <- Q.fetch -< ()
-        returnA -< (surface, transform, texture)
-    )
+    ((,) <$> Q.fetch <*> Q.fetch)
+    $ do
+      surface <- Q.fetch
+      transform <- Q.fetch
+      texture <- Q.fetch
+      return (surface, transform, texture)
 
 -- | Query all windows and drawable surfaces.
 --
 -- @since 0.6
 allWindowDraws ::
-  (ArrowQueryReader q, ArrowDynamicQueryReader q, MonadReaderSystem q s) =>
-  q () a ->
-  q () b ->
+  (Applicative q, QueryReaderF q, DynamicQueryReaderF q, MonadReaderSystem q s) =>
+  q a ->
+  q b ->
   s [(WindowRenderer, [(a, [b])])]
 allWindowDraws qA qB = do
   cameras <-
-    S.all
-      ()
-      ( proc () -> do
-          eId <- Q.entity -< ()
-          cameraTarget <- Q.fetch @_ @CameraTarget -< ()
-          a <- qA -< ()
-          returnA -< (eId, cameraTarget, a)
-      )
+    S.all $ do
+      eId <- Q.entity
+      cameraTarget <- Q.fetch @_ @CameraTarget
+      a <- qA
+      return (eId, cameraTarget, a)
 
-  windows <- S.all () (Q.entity &&& Q.fetch @_ @WindowRenderer)
+  windows <- S.all ((,) <$> Q.entity <*> Q.fetch @_ @WindowRenderer)
   draws <-
-    S.all
-      ()
-      ( proc () -> do
-          t <- Q.fetch @_ @SurfaceTarget -< ()
-          a <- qB -< ()
-          returnA -< (t, a)
-      )
+    S.all $ do
+      t <- Q.fetch @_ @SurfaceTarget
+      a <- qB
+      return (t, a)
+
   let cameraDraws =
         map
           ( \(eId, cameraTarget, b) ->
@@ -362,15 +360,16 @@ instance NFData Surface where
 --
 -- @since 0.6
 addSurfaceTargets ::
-  ( ArrowQueryReader q,
-    ArrowDynamicQueryReader q,
+  ( Applicative q,
+    QueryReaderF q,
+    DynamicQueryReaderF q,
     MonadReaderSystem q s,
     MonadAccess b m
   ) =>
   s (m ())
 addSurfaceTargets = do
-  cameras <- S.all () (Q.entity &&& Q.fetch @_ @Camera)
-  newDraws <- S.filter () (Q.entity &&& Q.fetch @_ @Surface) (without @SurfaceTarget)
+  cameras <- S.all ((,) <$> Q.entity <*> Q.fetch @_ @Camera)
+  newDraws <- S.filter ((,) <$> Q.entity <*> Q.fetch @_ @Surface) (without @SurfaceTarget)
   let go = case cameras of
         (cameraEId, _) : _ -> mapM_ (\(eId, _) -> A.insert eId . bundle $ SurfaceTarget cameraEId) newDraws
         _ -> return ()
@@ -380,20 +379,23 @@ addSurfaceTargets = do
 --
 -- @since 0.6
 updateTime ::
-  ( ArrowQuery m q,
+  ( Applicative q,
+    QueryF m q,
     MonadSystem q s,
     MonadIO m
   ) =>
   s ()
-updateTime = void . S.mapSingle () $ Q.adjustM (\_ _ -> Time <$> SDL.ticks)
+updateTime = void . S.mapSingle $ Q.adjustM (\_ _ -> Time <$> SDL.ticks) (pure ())
 
 -- | Keyboard input system.
 --
 -- @since 0.6
 handleInput ::
-  ( ArrowQueryReader qr,
+  ( Applicative qr,
+    QueryReaderF qr,
     MonadReaderSystem qr s,
-    ArrowQuery m q,
+    Applicative q,
+    QueryF m q,
     MonadSystem q s,
     MonadIO s
   ) =>
@@ -404,7 +406,7 @@ handleInput = liftIO pollEvents >>= handleInput'
 --
 -- @since 0.6
 handleInput' ::
-  (ArrowQueryReader qr, MonadReaderSystem qr s, ArrowQuery m q, MonadSystem q s) =>
+  (Applicative qr, QueryReaderF qr, MonadReaderSystem qr s, Applicative q, QueryF m q, MonadSystem q s) =>
   [Event] ->
   s ()
 handleInput' events = do
@@ -438,8 +440,8 @@ handleInput' events = do
           )
         _ -> (kbAcc, mouseAcc)
       (updateKb, updateMouse) = foldl' go (id, id) events
-  _ <- S.map () . Q.adjust $ const updateKb
-  _ <- S.map () . Q.adjust $ const updateMouse
+  _ <- S.mapSingle $ Q.adjust (const updateKb) (pure ())
+  _ <- S.mapSingle $ Q.adjust (const updateMouse) (pure ())
   return ()
 
 -- | Convert an SDL mouse button to `MouseButton`.

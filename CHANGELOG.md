@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
+## [0.7.0](https://github.com/aztecs-hs/aztecs-sdl/compare/aztecs-sdl-v0.6.0..aztecs-sdl-v0.7.0) - 2025-3-6
+
 ## [0.6.0](https://github.com/aztecs-hs/aztecs-sdl/compare/aztecs-sdl-v0.5.0..aztecs-sdl-v0.6.0) - 2025-3-4
 
 ## [0.5.0](https://github.com/aztecs-hs/aztecs-sdl/compare/aztecs-sdl-v0.4.0..aztecs-sdl-v0.5.0) - 2025-2-26
