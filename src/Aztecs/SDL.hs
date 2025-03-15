@@ -13,16 +13,20 @@ module Aztecs.SDL
     Size (..),
 
     -- * Systems
-    drawSurfaces,
+    buildTextures,
+    drawTextures,
 
     -- * Internal
     SurfaceTexture (..),
+    drawTexture,
   )
 where
 
 import Aztecs.ECS
 import qualified Aztecs.ECS.Access as A
+import Control.Monad.IO.Class
 import Linear
+import Linear.Affine
 import qualified SDL
 
 data Surface = Surface
@@ -33,7 +37,7 @@ data Surface = Surface
 instance Component Surface
 
 data Transform = Transform
-  { transformTranslation :: V2 Float,
+  { transformTranslation :: V2 Int,
     transformScale :: V2 Float,
     transformRotation :: Float
   }
@@ -44,8 +48,8 @@ newtype Size = Size {unSize :: V2 Float}
 
 instance Component Size
 
-drawSurfaces :: SDL.Renderer -> AccessT IO ()
-drawSurfaces renderer = do
+buildTextures :: SDL.Renderer -> AccessT IO ()
+buildTextures renderer = do
   surfaces <- system $ readQuery $ (,,,) <$> entity <*> fetch <*> fetch <*> fetchMaybe
   mapM_
     ( \(eId, surface, transform, maybeTexture) -> do
@@ -66,6 +70,34 @@ drawSurfaces renderer = do
           )
     )
     surfaces
+
+drawTextures :: SDL.Renderer -> AccessT IO ()
+drawTextures renderer = do
+  surfaces <- system $ readQuery $ (,,) <$> fetch <*> fetch <*> fetch
+  mapM_
+    (\(surface, transform, texture) -> liftIO $ drawTexture surface texture transform renderer)
+    surfaces
+
+drawTexture :: Surface -> SurfaceTexture -> Transform -> SDL.Renderer -> IO ()
+drawTexture surface texture transform renderer = do
+  textureDesc <- SDL.queryTexture $ unSurfaceTexture texture
+  SDL.copyEx
+    renderer
+    (unSurfaceTexture texture)
+    (fmap fromIntegral <$> surfaceBounds surface)
+    ( Just
+        ( SDL.Rectangle
+            (fmap fromIntegral . P $ transformTranslation transform)
+            ( maybe
+                (fromIntegral <$> V2 (SDL.textureWidth textureDesc) (SDL.textureHeight textureDesc))
+                (\(SDL.Rectangle _ s) -> fmap fromIntegral s)
+                (surfaceBounds surface)
+            )
+        )
+    )
+    (realToFrac $ transformRotation transform)
+    Nothing
+    (V2 False False)
 
 newtype SurfaceTexture = SurfaceTexture {unSurfaceTexture :: SDL.Texture}
 
